@@ -133,10 +133,17 @@ jobs:
 
       - name: Create proxy bundle zip
         run: |
+          echo "==> Files to be zipped:"
+          find apiproxy/ -type f | sort
+
+          # Apigee requires the zip root to contain proxies/, policies/, targets/
+          # directly — NOT nested under apiproxy/. cd into apiproxy/ first so
+          # zip paths start at proxies/... not apiproxy/proxies/...
           cd apiproxy
           zip -r ../${{ env.BUNDLE_ZIP }} .
           cd ..
-          echo "==> Bundle contents:"
+
+          echo "==> Bundle contents (must NOT show apiproxy/ prefix):"
           unzip -l ${{ env.BUNDLE_ZIP }}
 
       - name: Upload proxy zip bundle
@@ -196,8 +203,15 @@ jobs:
           REVISION=$(echo "$RESPONSE" | python3 -c "
           import sys, json
           data = json.load(sys.stdin)
-          print(data.get('revision', data.get('name', '').split('/')[-1]))
-          " 2>/dev/null || echo "1")
+          if 'error' in data:
+              print(f'ERROR: {data["error"]["message"]}', file=sys.stderr)
+              sys.exit(1)
+          rev = data.get('revision', data.get('name', '').split('/')[-1])
+          if not rev:
+              print('ERROR: revision is empty', file=sys.stderr)
+              sys.exit(1)
+          print(rev)
+          " 2>/dev/null || { echo "❌ Import failed — see response above"; exit 1; })
 
           echo "==> Revision: $REVISION"
           echo "revision=$REVISION" >> "$GITHUB_OUTPUT"
