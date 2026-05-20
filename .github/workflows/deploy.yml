@@ -7,7 +7,6 @@ on:
     paths:
       - 'scripts/generate_xml.py'
       - 'apiproxy/**/*.xml'
-      - '.github/workflows/deploy.yml'
 
 env:
   PROXY_NAME: my-proxy-with-quota
@@ -15,42 +14,14 @@ env:
   PYTHON_VER: '3.11'
 
 # ─────────────────────────────────────────────────────────────────────────────
-# JOB 1 — SCAFFOLD
-# Creates the apiproxy/ directory tree via create_structure.py.
+# JOB 1 — SCAFFOLD + GENERATE XML & SYNC REPO
+# Runs create_structure.py then generate_xml.py in a single job so there is
+# no artifact hand-off between them.  Commits and pushes any changed XML back
+# to main so the repo always reflects what was deployed.
 # ─────────────────────────────────────────────────────────────────────────────
 jobs:
-  scaffold:
-    name: 1 · Scaffold
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VER }}
-
-      - name: Run create_structure.py
-        run: python scripts/create_structure.py
-
-      - name: Upload scaffolded tree
-        uses: actions/upload-artifact@v4
-        with:
-          name: scaffolded-proxy
-          path: apiproxy/
-
-# ─────────────────────────────────────────────────────────────────────────────
-# JOB 2 — GENERATE XML & SYNC REPO
-# Runs generate_xml.py to (re)write all XML files from the constants defined
-# at the top of that script, then commits and pushes any changes back to main
-# so the repository always matches exactly what was deployed to Apigee.
-# ─────────────────────────────────────────────────────────────────────────────
   generate:
-    name: 2 · Generate XML & sync repo
-    needs: scaffold
+    name: 1 · Scaffold & generate XML
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -66,13 +37,10 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VER }}
 
-      - name: Download scaffolded tree
-        uses: actions/download-artifact@v4
-        with:
-          name: scaffolded-proxy
-          path: apiproxy/
+      - name: Scaffold directory tree
+        run: python scripts/create_structure.py
 
-      - name: Run generate_xml.py
+      - name: Generate XML files
         run: python scripts/generate_xml.py
 
       - name: Commit & push generated XML to repo
@@ -93,7 +61,7 @@ jobs:
           Workflow run : ${{ github.workflow }} #${{ github.run_number }}
           Actor        : ${{ github.actor }}"
 
-            git push origin HEAD:main
+            git push https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }}.git HEAD:main
             echo "==> XML changes pushed to main."
           fi
 
@@ -104,12 +72,12 @@ jobs:
           path: apiproxy/
 
 # ─────────────────────────────────────────────────────────────────────────────
-# JOB 3 — LINT
+# JOB 2 — LINT
 # Runs apigeelint against the generated bundle.  Fails before Apigee is
 # touched if any policy or structure rule is violated.
 # ─────────────────────────────────────────────────────────────────────────────
   lint:
-    name: 3 · Apigee lint
+    name: 2 · Apigee lint
     needs: generate
     runs-on: ubuntu-latest
     permissions:
@@ -146,11 +114,11 @@ jobs:
           path: apiproxy/
 
 # ─────────────────────────────────────────────────────────────────────────────
-# JOB 4 — PACKAGE
+# JOB 3 — PACKAGE
 # Zips the linted apiproxy/ bundle into proxy-bundle.zip.
 # ─────────────────────────────────────────────────────────────────────────────
   package:
-    name: 4 · Package zip
+    name: 3 · Package zip
     needs: lint
     runs-on: ubuntu-latest
     permissions:
@@ -177,13 +145,13 @@ jobs:
           path: ${{ env.BUNDLE_ZIP }}
 
 # ─────────────────────────────────────────────────────────────────────────────
-# JOB 5 — DEPLOY
+# JOB 4 — DEPLOY
 # Authenticates to GCP via Workload Identity Federation (keyless — no JSON key
 # stored anywhere), imports the zip to Apigee (auto-increments revision),
 # deploys to the eval environment, and prints a deployment summary.
 # ─────────────────────────────────────────────────────────────────────────────
   deploy:
-    name: 5 · Deploy to Apigee Eval (Keyless Auth)
+    name: 4 · Deploy to Apigee Eval (Keyless Auth)
     runs-on: ubuntu-latest
     needs: package
     permissions:
