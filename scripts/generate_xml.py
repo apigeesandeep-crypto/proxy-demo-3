@@ -22,7 +22,7 @@ import textwrap
 # ══════════════════════════════════════════════════════════════════════════════
 PROXY_NAME      = "my-proxy-with-quota"
 BASE_PATH       = "/v1/myapi"
-TARGET_URL      = "https://httpbin.org"
+TARGET_URL      = "https://mocktarget.apigee.net"
 QUOTA_LIMIT     = 3
 QUOTA_INTERVAL  = 1
 QUOTA_TIME_UNIT = "minute"   # minute | hour | day
