@@ -5,8 +5,8 @@ on:
     branches:
       - main
     paths:
-      - 'scripts/generate_xml.py'
-      - 'apiproxy/**/*.xml'
+      - 'scripts/**'
+      - 'apiproxy/**'
       - '.github/workflows/deploy.yml'
 
 env:
@@ -15,22 +15,23 @@ env:
   PYTHON_VER: '3.11'
 
 # ─────────────────────────────────────────────────────────────────────────────
-# JOB 1 — SCAFFOLD + GENERATE XML & SYNC REPO
-# Runs create_structure.py then generate_xml.py in a single job so there is
-# no artifact hand-off between them.  Commits and pushes any changed XML back
-# to main so the repo always reflects what was deployed.
+# JOB 1 — GENERATE PROXY STRUCTURE + XML
 # ─────────────────────────────────────────────────────────────────────────────
 jobs:
+
   generate:
-    name: 1 · Scaffold & generate XML
+    name: 1 · Scaffold & Generate XML
     runs-on: ubuntu-latest
+
     permissions:
       contents: write
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GH_PAT }}
+          ref: ${{ github.ref }}
           fetch-depth: 0
 
       - name: Set up Python
@@ -38,112 +39,132 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VER }}
 
-      - name: Scaffold directory tree
-        run: python scripts/create_structure.py
-
-      - name: Generate XML files
-        run: python scripts/generate_xml.py
-
-      - name: Commit & push generated XML to repo
+      - name: Run scaffold script
         run: |
-          git config user.name  "github-actions[bot]"
+          echo "==> Running create_structure.py ..."
+          python scripts/create_structure.py .
+
+      - name: Run XML generator
+        run: |
+          echo "==> Running generate_xml.py ..."
+          python scripts/generate_xml.py .
+
+      - name: Verify generated files
+        run: |
+          echo "==> apiproxy structure:"
+          find apiproxy -type f | sort
+
+      - name: Commit & push generated proxy files
+        run: |
+          git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           git add apiproxy/
-          git add scripts/generate_xml.py
+          git add scripts/
 
           if git diff --cached --quiet; then
-            echo "==> No XML changes to commit."
+            echo "==> No changes to commit."
           else
-            git commit -m "chore(proxy): regenerate XML [skip ci]
-
-          Triggered by : ${{ github.sha }}
-          Proxy        : ${{ env.PROXY_NAME }}
-          Workflow run : ${{ github.workflow }} #${{ github.run_number }}
-          Actor        : ${{ github.actor }}"
-
+            git commit -m "ci: regenerate Apigee proxy bundle [skip ci]"
             git push https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }}.git HEAD:main
-            echo "==> XML changes pushed to main."
+            echo "==> Changes pushed successfully."
           fi
 
-      - name: Upload generated proxy bundle
+      - name: Upload proxy source artifact
         uses: actions/upload-artifact@v4
         with:
-          name: generated-proxy
+          name: proxy-bundle-src
           path: apiproxy/
+          retention-days: 1
 
 # ─────────────────────────────────────────────────────────────────────────────
-# JOB 2 — LINT
-# Runs apigeelint against the generated bundle.  Fails before Apigee is
-# touched if any policy or structure rule is violated.
+# JOB 2 — APIGEE LINT
 # ─────────────────────────────────────────────────────────────────────────────
   lint:
-    name: 2 · Apigee lint
-    needs: generate
+    name: 2 · Apigee Lint
     runs-on: ubuntu-latest
+    needs: generate
+
     permissions:
       contents: read
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Download generated proxy
+      - name: Download proxy source artifact
         uses: actions/download-artifact@v4
         with:
-          name: generated-proxy
+          name: proxy-bundle-src
           path: apiproxy/
+
+      - name: Verify downloaded files
+        run: |
+          echo "==> Downloaded proxy files:"
+          find apiproxy -type f | sort
 
       - name: Install apigeelint
         run: npm install -g apigeelint
 
-      - name: Lint proxy bundle
+      - name: Run apigeelint
         run: |
+          echo "==> Running apigeelint ..."
           apigeelint \
-            -s apiproxy/ \
+            -s apiproxy \
             -f table.js \
+            --profile apigee \
             --maxWarnings 10
 
-      - name: Upload lint-passed proxy
+      - name: Upload linted proxy source
         uses: actions/upload-artifact@v4
         with:
-          name: lint-report
+          name: linted-proxy-src
           path: apiproxy/
+          retention-days: 1
 
 # ─────────────────────────────────────────────────────────────────────────────
-# JOB 3 — PACKAGE
-# Zips the linted apiproxy/ bundle into proxy-bundle.zip.
+# JOB 3 — PACKAGE PROXY BUNDLE
 # ─────────────────────────────────────────────────────────────────────────────
   package:
-    name: 3 · Package zip
-    needs: lint
+    name: 3 · Package Proxy Bundle
     runs-on: ubuntu-latest
+    needs: lint
+
     permissions:
       contents: read
+
     steps:
-      - name: Download lint-passed proxy
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+
+      - name: Download linted proxy source
         uses: actions/download-artifact@v4
         with:
-          name: lint-report
+          name: linted-proxy-src
           path: apiproxy/
 
-      - name: Create proxy bundle zip
+      - name: Verify proxy structure
         run: |
-          echo "==> Files to be zipped:"
-          find apiproxy/ -type f | sort
+          echo "==> Proxy files:"
+          find apiproxy -type f | sort
 
-          # Apigee requires the zip root to contain proxies/, policies/, targets/
-          # directly — NOT nested under apiproxy/. cd into apiproxy/ first so
-          # zip paths start at proxies/... not apiproxy/proxies/...
-          cd apiproxy
-          zip -r ../${{ env.BUNDLE_ZIP }} .
-          cd ..
+      - name: Create proxy zip bundle
+        run: |
+          echo "==> Creating proxy bundle ..."
+          zip -r ${{ env.BUNDLE_ZIP }} apiproxy/
 
-          echo "==> Bundle contents (must NOT show apiproxy/ prefix):"
+          echo "==> Bundle contents:"
           unzip -l ${{ env.BUNDLE_ZIP }}
 
       - name: Upload proxy zip bundle
@@ -151,30 +172,44 @@ jobs:
         with:
           name: proxy-zip-bundle
           path: ${{ env.BUNDLE_ZIP }}
+          retention-days: 1
 
 # ─────────────────────────────────────────────────────────────────────────────
-# JOB 4 — DEPLOY
-# Authenticates to GCP via Workload Identity Federation (keyless — no JSON key
-# stored anywhere), imports the zip to Apigee (auto-increments revision),
-# deploys to the eval environment, and prints a deployment summary.
+# JOB 4 — DEPLOY TO APIGEE
 # ─────────────────────────────────────────────────────────────────────────────
   deploy:
-    name: 4 · Deploy to Apigee Eval (Keyless Auth)
+    name: 4 · Deploy to Apigee Eval
     runs-on: ubuntu-latest
     needs: package
+
     permissions:
       contents: read
-      id-token: write   # required for Workload Identity Federation (keyless)
+      id-token: write
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
 
       - name: Download zipped proxy bundle
         uses: actions/download-artifact@v4
         with:
           name: proxy-zip-bundle
 
-      - name: Authenticate to GCP via Workload Identity Federation
+      - name: Verify downloaded bundle
+        run: |
+          echo "==> Current directory:"
+          pwd
+
+          echo "==> Files:"
+          ls -R
+
+          echo "==> ZIP contents:"
+          unzip -l ${{ env.BUNDLE_ZIP }}
+
+      - name: Authenticate to GCP
         id: auth
         uses: google-github-actions/auth@v2
         with:
@@ -190,7 +225,8 @@ jobs:
       - name: Import proxy bundle to Apigee
         id: import
         run: |
-          echo "==> Importing ${{ env.BUNDLE_ZIP }} to Apigee org: ${{ secrets.APIGEE_ORG }} ..."
+          echo "==> Importing bundle to Apigee org: ${{ secrets.APIGEE_ORG }} ..."
+
           RESPONSE=$(curl -s -X POST \
             "https://apigee.googleapis.com/v1/organizations/${{ secrets.APIGEE_ORG }}/apis?action=import&name=${{ env.PROXY_NAME }}&validate=true" \
             -H "Authorization: Bearer ${{ steps.auth.outputs.access_token }}" \
@@ -203,23 +239,29 @@ jobs:
           REVISION=$(echo "$RESPONSE" | python3 -c "
           import sys, json
           data = json.load(sys.stdin)
+
           if 'error' in data:
-              print(f'ERROR: {data["error"]["message"]}', file=sys.stderr)
+              print(data['error']['message'], file=sys.stderr)
               sys.exit(1)
-          rev = data.get('revision', data.get('name', '').split('/')[-1])
+
+          rev = data.get('revision')
+
           if not rev:
-              print('ERROR: revision is empty', file=sys.stderr)
+              print('Revision missing', file=sys.stderr)
               sys.exit(1)
+
           print(rev)
-          " 2>/dev/null || { echo "❌ Import failed — see response above"; exit 1; })
+          ")
 
           echo "==> Revision: $REVISION"
+
           echo "revision=$REVISION" >> "$GITHUB_OUTPUT"
 
-      - name: Deploy proxy revision to eval environment
+      - name: Deploy proxy revision
         run: |
           REVISION="${{ steps.import.outputs.revision }}"
-          echo "==> Deploying revision $REVISION to env: ${{ secrets.APIGEE_ENV }} ..."
+
+          echo "==> Deploying revision $REVISION ..."
 
           RESPONSE=$(curl -s -X POST \
             "https://apigee.googleapis.com/v1/organizations/${{ secrets.APIGEE_ORG }}/environments/${{ secrets.APIGEE_ENV }}/apis/${{ env.PROXY_NAME }}/revisions/${REVISION}/deployments?override=true" \
@@ -233,33 +275,33 @@ jobs:
           import sys, json
           data = json.load(sys.stdin)
           print(data.get('state', 'UNKNOWN'))
-          " 2>/dev/null || echo "UNKNOWN")
+          ")
 
-          echo "==> State: $STATE"
+          echo "==> Deployment state: $STATE"
+
           if [ "$STATE" = "READY" ] || [ "$STATE" = "PROGRESSING" ]; then
-            echo "==> Deployment initiated successfully."
+            echo "==> Deployment successful."
           else
-            echo "::warning:: Deployment state '$STATE' - verify in Apigee console."
+            echo "::warning::Deployment state is $STATE"
           fi
 
-      - name: Verify deployment status
+      - name: Verify deployment
         run: |
-          echo "==> Verifying ..."
+          echo "==> Verifying deployment ..."
+
           RESPONSE=$(curl -s \
             "https://apigee.googleapis.com/v1/organizations/${{ secrets.APIGEE_ORG }}/environments/${{ secrets.APIGEE_ENV }}/apis/${{ env.PROXY_NAME }}/deployments" \
             -H "Authorization: Bearer ${{ steps.auth.outputs.access_token }}")
 
-          echo "==> Deployment status:"
           echo "$RESPONSE" | python3 -m json.tool || echo "$RESPONSE"
 
       - name: Deployment summary
         run: |
-          echo ""
           echo "=================================================="
-          echo "  Proxy Name  : ${{ env.PROXY_NAME }}"
-          echo "  Org         : ${{ secrets.APIGEE_ORG }}"
-          echo "  Environment : ${{ secrets.APIGEE_ENV }}"
-          echo "  Revision    : ${{ steps.import.outputs.revision }}"
-          echo "  Triggered by: ${{ github.actor }}"
-          echo "  Commit SHA  : ${{ github.sha }}"
+          echo "Proxy Name : ${{ env.PROXY_NAME }}"
+          echo "Org        : ${{ secrets.APIGEE_ORG }}"
+          echo "Environment: ${{ secrets.APIGEE_ENV }}"
+          echo "Revision   : ${{ steps.import.outputs.revision }}"
+          echo "Actor      : ${{ github.actor }}"
+          echo "Commit SHA : ${{ github.sha }}"
           echo "=================================================="
