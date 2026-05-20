@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<APIProxy revision="1" name="my-proxy-with-quota">
+    <DisplayName>my-proxy-with-quota</DisplayName>
+    <Description>Proxy with 3 requests per minute quota policy</Description>
+    <BasePaths>/v1/myapi</BasePaths>
+    <Policies>
+        <Policy>Quota-3-per-min</Policy>
+    </Policies>
+    <ProxyEndpoints>
+        <ProxyEndpoint>default</ProxyEndpoint>
+    </ProxyEndpoints>
+    <TargetEndpoints>
+        <TargetEndpoint>default</TargetEndpoint>
+    </TargetEndpoints>
+</APIProxy>
