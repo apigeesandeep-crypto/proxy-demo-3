@@ -15,6 +15,6 @@
     <Flows/>
 
     <HTTPTargetConnection>
-        <URL>https://httpbin.org</URL>
+        <URL>https://mocktarget.apigee.net</URL>
     </HTTPTargetConnection>
 </TargetEndpoint>
