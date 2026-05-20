@@ -3,7 +3,7 @@ name: Apigee Proxy CI/CD
 on:
   push:
     branches:
-      - mai
+      - main
     paths:
       - 'scripts/generate_xml.py'
       - 'apiproxy/**/*.xml'
